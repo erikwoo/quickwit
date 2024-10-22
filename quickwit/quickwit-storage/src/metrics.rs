@@ -21,8 +21,8 @@
 
 use once_cell::sync::Lazy;
 use quickwit_common::metrics::{
-    new_counter, new_counter_vec, new_counter_with_labels, new_gauge, IntCounter, IntCounterVec,
-    IntGauge,
+    exponential_buckets, new_counter, new_counter_vec, new_gauge, new_histogram_vec, Histogram,
+    IntCounter, IntCounterVec, IntGauge,
 };
 
 /// Counters associated to storage operations.
@@ -41,6 +41,9 @@ pub struct StorageMetrics {
     pub object_storage_put_parts: IntCounter,
     pub object_storage_download_num_bytes: IntCounter,
     pub object_storage_upload_num_bytes: IntCounter,
+    pub object_storage_get_requests_duration: Histogram,
+    pub object_storage_put_requests_duration: Histogram,
+    pub object_storage_upload_part_requests_duration: Histogram,
 }
 
 impl Default for StorageMetrics {
@@ -60,6 +63,22 @@ impl Default for StorageMetrics {
         ];
         let get_slice_timeout_all_timeouts =
             get_slice_timeout_outcome_total_vec.with_label_values(["all_timeouts"]);
+
+        let object_storage_requests_duration = new_histogram_vec(
+            "object_storage_request_duration_seconds",
+            "Duration of object storage requests in seconds.",
+            "storage",
+            &[],
+            ["action"],
+            exponential_buckets(0.001, 2.0, 15).unwrap(),
+        );
+        let object_storage_get_requests_duration =
+            object_storage_requests_duration.with_label_values(["get_object"]);
+        let object_storage_put_requests_duration =
+            object_storage_requests_duration.with_label_values(["put_object"]);
+        let object_storage_upload_part_requests_duration =
+            object_storage_requests_duration.with_label_values(["upload_part"]);
+
         StorageMetrics {
             fast_field_cache: CacheMetrics::for_component("fastfields"),
             fd_cache_metrics: CacheMetrics::for_component("fd"),
@@ -107,6 +126,9 @@ impl Default for StorageMetrics {
                 "storage",
                 &[],
             ),
+            object_storage_get_requests_duration,
+            object_storage_put_requests_duration,
+            object_storage_upload_part_requests_duration,
         }
     }
 }
@@ -139,19 +161,19 @@ impl CacheMetrics {
                 CACHE_METRICS_NAMESPACE,
                 &[("component_name", component_name)],
             ),
-            hits_num_items: new_counter_with_labels(
+            hits_num_items: new_counter(
                 "cache_hits_total",
                 "Number of cache hits by component",
                 CACHE_METRICS_NAMESPACE,
                 &[("component_name", component_name)],
             ),
-            hits_num_bytes: new_counter_with_labels(
+            hits_num_bytes: new_counter(
                 "cache_hits_bytes",
                 "Number of cache hits in bytes by component",
                 CACHE_METRICS_NAMESPACE,
                 &[("component_name", component_name)],
             ),
-            misses_num_items: new_counter_with_labels(
+            misses_num_items: new_counter(
                 "cache_misses_total",
                 "Number of cache misses by component",
                 CACHE_METRICS_NAMESPACE,

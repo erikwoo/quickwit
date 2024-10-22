@@ -285,6 +285,9 @@ impl S3CompatibleObjectStorage {
         payload: Box<dyn crate::PutPayload>,
         len: u64,
     ) -> Result<(), Retry<StorageError>> {
+        let _timer = crate::STORAGE_METRICS
+            .object_storage_put_requests_duration
+            .start_timer();
         let body = payload
             .byte_stream()
             .await
@@ -423,10 +426,14 @@ impl S3CompatibleObjectStorage {
             .map_err(StorageError::from)
             .map_err(Retry::Permanent)?;
         let md5 = BASE64_STANDARD.encode(part.md5.0);
+
         crate::STORAGE_METRICS.object_storage_put_parts.inc();
         crate::STORAGE_METRICS
             .object_storage_upload_num_bytes
             .inc_by(part.len());
+        let _timer = crate::STORAGE_METRICS
+            .object_storage_upload_part_requests_duration
+            .start_timer();
 
         let upload_part_output = self
             .s3_client
@@ -538,7 +545,7 @@ impl S3CompatibleObjectStorage {
         Ok(())
     }
 
-    async fn create_get_object_request(
+    async fn get_object(
         &self,
         path: &Path,
         range_opt: Option<Range<usize>>,
@@ -546,6 +553,9 @@ impl S3CompatibleObjectStorage {
         let key = self.key(path);
         let range_str = range_opt.map(|range| format!("bytes={}-{}", range.start, range.end - 1));
         crate::STORAGE_METRICS.object_storage_get_total.inc();
+        let _timer = crate::STORAGE_METRICS
+            .object_storage_get_requests_duration
+            .start_timer();
 
         let get_object_output = self
             .s3_client
@@ -565,7 +575,7 @@ impl S3CompatibleObjectStorage {
     ) -> StorageResult<Vec<u8>> {
         let cap = range_opt.as_ref().map(Range::len).unwrap_or(0);
         let get_object_output = aws_retry(&self.retry_params, || {
-            self.create_get_object_request(path, range_opt.clone())
+            self.get_object_request(path, range_opt)
         })
         .await?;
         let mut buf: Vec<u8> = Vec::with_capacity(cap);
@@ -638,6 +648,9 @@ impl S3CompatibleObjectStorage {
         for (path_chunk, delete) in &mut delete_requests_it {
             let delete_objects_res: StorageResult<DeleteObjectsOutput> =
                 aws_retry(&self.retry_params, || async {
+                    let _timer = crate::STORAGE_METRICS
+                        .object_storage_batch_delete_requests_duration
+                        .start_timer();
                     self.s3_client
                         .delete_objects()
                         .bucket(self.bucket.clone())
@@ -753,7 +766,7 @@ impl Storage for S3CompatibleObjectStorage {
     async fn copy_to(&self, path: &Path, output: &mut dyn SendableAsync) -> StorageResult<()> {
         let _permit = REQUEST_SEMAPHORE.acquire().await;
         let get_object_output = aws_retry(&self.retry_params, || {
-            self.create_get_object_request(path, None)
+            self.get_object_request(pa)
         })
         .await?;
         let mut body_read = BufReader::new(get_object_output.body.into_async_read());
@@ -818,7 +831,7 @@ impl Storage for S3CompatibleObjectStorage {
     ) -> crate::StorageResult<Box<dyn AsyncRead + Send + Unpin>> {
         let permit = REQUEST_SEMAPHORE.acquire().await;
         let get_object_output = aws_retry(&self.retry_params, || {
-            self.create_get_object_request(path, Some(range.clone()))
+            self.get_object_request(path, Some(range.)
         })
         .await?;
         Ok(Box::new(S3AsyncRead {
